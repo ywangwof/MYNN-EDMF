@@ -88,7 +88,8 @@
 !                  qoz               ,                                                               &
                   rthraten          , pblh              , kpbl               ,                      &
                   cldfra_bl         , qc_bl             , qi_bl              , maxwidth           , &
-                  maxmf             , ztop_plume        , qke                , qke_adv            , &
+                  maxmf             , ztop_plume        , excess_h           , excess_q           , &
+                  qke               , qke_adv           ,                                           &
                   tsq               , qsq               , cov                ,                      &
                   el_pbl            , rublten           , rvblten            , rthblten           , &
                   rqvblten          , rqcblten          , rqiblten           , rqsblten           , &
@@ -103,7 +104,8 @@
                   sm3d              , spp_pbl           , pattern_spp_pbl    , icloud_bl          , &
                   bl_mynn_tkeadvect , tke_budget        , bl_mynn_cloudpdf   , bl_mynn_mixlength  , &
                   bl_mynn_closure   , bl_mynn_edmf      , bl_mynn_edmf_mom   , bl_mynn_edmf_tke   , &
-                  bl_mynn_output    , bl_mynn_mixscalars, bl_mynn_cloudmix   , bl_mynn_mixqt        &
+                  bl_mynn_output    , bl_mynn_mixscalars, bl_mynn_mixaerosols, bl_mynn_mixnumcon  , &
+                  bl_mynn_cloudmix  , bl_mynn_mixqt     , bl_mynn_edmf_dd                           &
 #if(WRF_CHEM == 1)
                   ,mix_chem         , chem3d            , vd3d               , nchem              , &
                   kdvel             , ndvel             , num_vert_mix                              &
@@ -147,12 +149,15 @@
          bl_mynn_mixlength,                             &
          icloud_bl,                                     &
          bl_mynn_edmf,                                  &
+         bl_mynn_edmf_dd,                               &
          bl_mynn_edmf_mom,                              &
          bl_mynn_edmf_tke,                              &
          bl_mynn_cloudmix,                              &
          bl_mynn_mixqt,                                 &
          bl_mynn_output,                                &
          bl_mynn_mixscalars,                            &
+         bl_mynn_mixaerosols,                           &
+         bl_mynn_mixnumcon,                             &
          spp_pbl,                                       &
          tke_budget
  real(kind_phys), intent(in) ::                         &
@@ -235,13 +240,17 @@
  real(kind_phys), dimension(ndvel)          :: vd
  real(kind_phys), dimension(ims:ime,jms:jme):: frp_mean, emis_ant_no
 #endif
+!Generic scalar array support (not yet connected to WRF, but any new scalars that need to be mixed
+!(locally and nonlocally) will need to come through this variables with bl_mynn_mixscalars=1.
+ integer, parameter :: nscalars=1
+ real(kind=kind_phys),dimension(kts:kte,nscalars):: scalars 
 
 !MYNN-2D
  real(kind_phys), dimension(ims:ime,jms:jme), intent(in) ::                       &
        xland,ts,qsfc,ps,ch,hfx,qfx,ust,wspd,znt,                                  &
        uoce,voce
  real(kind_phys), dimension(ims:ime,jms:jme), optional, intent(out) ::            &
-       maxwidth,maxmf,ztop_plume
+       maxwidth,maxmf,ztop_plume,excess_h,excess_q
  real(kind_phys), dimension(ims:ime,jms:jme), intent(out) ::                      &
        pblh
  integer, dimension(ims:ime,jms:jme), intent(out) ::                              &
@@ -253,7 +262,7 @@
  real(kind_phys), dimension(its:ite,kts:kte,jts:jte) :: ozone,rO3blten
  real(kind_phys):: xland1,ts1,qsfc1,ps1,ch1,hfx1,qfx1,ust1,wspd1,                 &
        znt1,uoce1,voce1,pblh1,maxwidth1,maxmf1,ztop_plume1,                       &
-       frp1,emis1
+       frp1,emis1,excess_h1,excess_q1
  integer   :: kpbl1
       
 !ccpp-requirements, but kept local, since WRF doesn't use them
@@ -372,6 +381,8 @@
          maxwidth1      = maxwidth(i,j)
          maxmf1         = maxmf(i,j)
          ztop_plume1    = ztop_plume(i,j)
+         excess_h1      = excess_h(i,j)
+         excess_q1      = excess_q(i,j)
       endif
       !check for unearthly incoming surface fluxes. These values are only surpassed
       !when the model is on the brink of crashing. If these limits are being surpassed,
@@ -397,7 +408,7 @@
          qfx1 = -3e-4
       endif
       
-      !spp input                                                                                                                                                                                  
+      !spp input
       if (spp_pbl > 0) then
          do k=kts,kte
             pattern_spp_pbl1(k) = pattern_spp_pbl(i,k,j)
@@ -507,6 +518,9 @@
       frp1        = frp_mean(i,j)
       emis1       = emis_ant_no(i,j)
 
+      !generic scalar array support
+      scalars     = 0.0
+      
       !find/fix negative mixing ratios
 !      call moisture_check2(kte, delt,                 &
 !                           delp(i,:), exner(i,:,j),   &
@@ -551,10 +565,11 @@
             sub_thl1        = sub_thl1      , sub_sqv1    = sub_sqv1      , det_thl1    = det_thl1     , &
             det_sqv1        = det_sqv1      ,                                                            &
             maxwidth        = maxwidth1     , maxmf       = maxmf1        , ztop_plume  = ztop_plume1  , &
+            excess_h        = excess_h1     , excess_q    = excess_q1     ,                              &
             flag_qc         = flag_qc       , flag_qi     = flag_qi       , flag_qs     = flag_qs      , &
             flag_ozone      = flag_ozone    , flag_qnc    = flag_qnc      , flag_qni    = flag_qni     , &
             flag_qnwfa      = flag_qnwfa    , flag_qnifa  = flag_qnifa    , flag_qnbca  = flag_qnbca   , &
-            pattern_spp_pbl1= pattern_spp_pbl1,                                                          &
+            pattern_spp_pbl1= pattern_spp_pbl1, scalars   = scalars       , nscalars    = nscalars     , &
 !#if(WRF_CHEM == 1)
             mix_chem        = mix_chem      , enh_mix     = enh_mix       , rrfs_sd     = rrfs_sd      , &
             smoke_dbg       = smoke_dbg     , nchem       = nchem         , kdvel       = kdvel        , &
@@ -567,9 +582,12 @@
             bl_mynn_mixlength  = bl_mynn_mixlength    , &
             closure            = bl_mynn_closure      , &
             bl_mynn_edmf       = bl_mynn_edmf         , &
+            bl_mynn_edmf_dd    = bl_mynn_edmf_dd      , &
             bl_mynn_edmf_mom   = bl_mynn_edmf_mom     , &
             bl_mynn_edmf_tke   = bl_mynn_edmf_tke     , &
             bl_mynn_mixscalars = bl_mynn_mixscalars   , &
+            bl_mynn_mixaerosols= bl_mynn_mixaerosols  , &
+            bl_mynn_mixnumcon  = bl_mynn_mixnumcon    , &
             bl_mynn_output     = bl_mynn_output       , &
             bl_mynn_cloudmix   = bl_mynn_cloudmix     , &
             bl_mynn_mixqt      = bl_mynn_mixqt        , &
@@ -608,6 +626,8 @@
          maxwidth(i,j)    = maxwidth1
          maxmf(i,j)       = maxmf1
          ztop_plume(i,j)  = ztop_plume1
+         excess_h(i,j)    = excess_h1
+         excess_q(i,j)	  = excess_q1
       endif
 
       !- Update 3d tendencies (already converted spec hum back to mixing ratio):
