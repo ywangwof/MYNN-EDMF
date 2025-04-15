@@ -3702,7 +3702,7 @@ END IF
            !except neglect all but the first term for sig_r
            r3sq   = max( qsq(k), zero )
            !Calculate sigma using higher-order moments:
-           sgm(k) = max(1e-13, sqrt( r3sq ))
+           sgm(k) = max(1e-13, sqrt( real(r3sq,kind_phys) ))
            !Set constraints on sigma relative to total water
            sgm(k) = min( sgm(k), qw(k)*onethird )
            
