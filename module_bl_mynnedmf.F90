@@ -348,7 +348,7 @@ MODULE module_bl_mynnedmf
 
 !Option to switch flux-profile relationship for surface (from Puhales et al. 2020)
 !0: use original Dyer-Hicks, 1: use Cheng-Brustaert and Blended COARE
- integer, parameter :: bl_mynn_stfunc = 1
+ integer, parameter :: bl_mynn_stfunc = 0
 
 !option to print out more stuff for debugging purposes
  logical, parameter :: debug_code = .false.
@@ -692,7 +692,6 @@ CONTAINS
 
        zw1(kts)=zero
        do k=kts,kte
-          thv1(k)=th1(k)*(one+p608*sqv1(k))
           !keep snow out for now - increases ceiling bias
           sqw1(k)=sqv1(k)+sqc1(k)+sqi1(k)!+sqs1(k)
           thl1(k)=th1(k) - xlvcp/ex1(k)*sqc1(k) &
@@ -702,6 +701,7 @@ CONTAINS
           !thl1(k)=th1(k)*(1.- xlvcp/MAX(tk1(k),TKmin)*sqc1(k) &
           !    &             - xlscp/MAX(tk1(k),TKmin)*sqi1(k))
           thlv1(k)=thl1(k)*(one+p608*sqv1(k))
+          thv1(k)=th1(k)*(one+p608*sqv1(k) - (sqc1(k)+sqi1(k)))
           zw1(k+1)=zw1(k)+dz1(k)
        enddo
 
@@ -710,7 +710,7 @@ CONTAINS
           !simple PBLH form of Koracin and Berkowicz (1988, BLM)
           !to linearly taper off tke towards top of PBL.
           do k=kts,kte
-             qke1(k)=5.*ust * MAX((ust*700. - zw1(k))/(MAX(ust,0.01)*700.), 0.01)
+             qke1(k)=5.0 * ust * MAX((ust*700. - zw1(k))/(MAX(ust,0.01)*700.), 0.01)
           enddo
        endif
 
@@ -864,7 +864,7 @@ CONTAINS
        !suggested min temperature to improve accuracy.
        !thl1(k)=th1(i,k)*(one- xlvcp/MAX(tk1(k),TKmin)*sqc1(k) &
        !    &               - xlscp/MAX(tk1(k),TKmin)*sqi1(k))
-       thv1(k)=th1(k)*(one+p608*sqv1(k))
+       thv1(k)=th1(k)*(one+p608*sqv1(k) - (sqc1(k)+sqi1(k)))
     enddo ! end k
 
 !>  - Call get_pblh() to calculate the hybrid \f$\theta_{v}-TKE\f$
@@ -883,7 +883,7 @@ CONTAINS
     endif
 
     sqcg= zero   !ill-defined variable; qcg has been removed
-    cpm=cp*(one + 0.84*max(sqv1(kts),1e-8))
+    cpm=cp*(one + 0.84_kind_phys*max(sqv1(kts),1e-8_kind_phys))
     exnerg=(ps/p1000mb)**rcp
 
     !-----------------------------------------------------
@@ -903,20 +903,34 @@ CONTAINS
     fltv=flt + flqv*p608*th_sfc      !! Virtual temperature flux
 
     ! Update 1/L using updated sfc heat flux and friction velocity
-    rmol = -karman*gtr*fltv/max(ust**3,1.0e-6_kind_phys)
+    rmol= -karman*gtr*fltv/max(ust**3,1.0e-6_kind_phys)
     zet = half*dz1(kts)*rmol
-    zet = max(zet, -20._kind_phys)
-    zet = min(zet,  20._kind_phys)
+    zet = max(zet, -10._kind_phys)
+    zet = min(zet,  10._kind_phys)
     !if(i.eq.idbg)print*,"updated z/L=",zet
     if (bl_mynn_stfunc == 0) then
        !Original Kansas-type stability functions
-       if ( zet >= zero ) then
-          pmz = one + (cphm_st-one) * zet
-          phh = one +  cphh_st      * zet
-       else
-          pmz = one/    (one-cphm_unst*zet)**0.25 - zet
-          phh = one/sqrt(one-cphh_unst*zet)
-       end if
+       if ((xland-1.5) .ge. zero) then       ! WATER
+          if ( zet >= zero ) then
+             !pmz = one + (cphm_st-one) * zet
+             pmz = 0.9_kind_phys + 3.5_kind_phys * zet
+             phh = one +  cphh_st * zet
+          else
+             !pmz = one/(one-cphm_unst*zet)**0.25 - zet
+             pmz = 0.9_kind_phys/(one - 18.0*zet)**0.25 - zet
+             phh = one/sqrt(one-cphh_unst*zet)
+          end if
+       else                                  ! LAND
+          if ( zet >= zero ) then
+             !pmz = one + (cphm_st-one) * zet
+             pmz = 0.95_kind_phys + 3.5_kind_phys * zet
+             phh = one + cphh_st       * zet
+          else
+             !pmz = one/(one-cphm_unst*zet)**0.25 - zet
+             pmz = 0.95_kind_phys/(one-cphm_unst*zet)**0.25 - zet
+             phh = one/sqrt(one-cphh_unst*zet)
+          end if
+       endif
     else
        !Updated stability functions (Puhales, 2020)
        phi_m = phim(zet)
@@ -1033,10 +1047,11 @@ CONTAINS
        qc_tot1(k) =max(qc_bl1(k),sqc1(k))
        qi_tot1(k) =max(qi_bl1(k),sqi1(k)+sqs1(k))
        thlv1(k)   =(th1(k) - xlvcp/ex1(k)*qc_tot1(k)  &
-                &          - xlscp/ex1(k)*qi_tot1(k)) &
-                &          * (one+p608*sqv1(k))
+            &              - xlscp/ex1(k)*qi_tot1(k)) &
+            &              * (one+p608*sqv1(k))
        thl_tot1(k)=th1(k)  - xlvcp/ex1(k)*qc_tot1(k)  &
-                &          - xlscp/ex1(k)*qi_tot1(k)
+            &              - xlscp/ex1(k)*qi_tot1(k)
+       thv1(k)    =th1(k)*(one+p608*sqv1(k) - (qc_tot1(k)+qi_tot1(k)))
     enddo
 
     call mym_turbulence(                                 &
@@ -1076,13 +1091,13 @@ CONTAINS
     if (dheat_opt > 0) then
        do k=kts,kte-1
           ! Set max dissipative heating rate to 7.2 K per hour
-          diss_heat1(k) = MIN(MAX(1.0*(qke1(k)**1.5)/(b1*MAX(half*(el1(k)+el1(k+1)),one))/cp, 0.0),0.002)
+          diss_heat1(k) = MIN(MAX((qke1(k)**1.5)/(b1*MAX(half*(el1(k)+el1(k+1)),one))/cp, zero),0.002)
           ! Limit heating above 100 mb:
           diss_heat1(k) = diss_heat1(k) * exp(-10000./MAX(p1(k),one)) 
        enddo
-       diss_heat1(kte) = 0.
+       diss_heat1(kte) = zero
     else
-       diss_heat1 = 0.
+       diss_heat1 = zero
     endif
 
 !>  - Call mynn_tendencies() to solve for tendencies of 
@@ -1557,16 +1572,16 @@ CONTAINS
 !    gtr = 9.81/tref
 !
 !intialize output
-    dtl(kts)=0.0
-    dqw(kts)=0.0
-    dtv(kts)=0.0
-    gm(kts)=0.0
-    gh(kts)=0.0
-    sm(kts)=0.0
-    sh(kts)=0.0
+    dtl(kts)=zero
+    dqw(kts)=zero
+    dtv(kts)=zero
+    gm(kts)=zero
+    gh(kts)=zero
+    sm(kts)=zero
+    sh(kts)=zero
 
     do k = kts+1,kte
-       dzk = 0.5  *( dz(k)+dz(k-1) )
+       dzk = half *( dz(k)+dz(k-1) )
        afk = dz(k)/( dz(k)+dz(k-1) )
        abk = one -afk
        duz = ( u(k)-u(k-1) )**2 +( v(k)-v(k-1) )**2
@@ -1580,8 +1595,8 @@ CONTAINS
           !use the buoyancy flux functions
           dtq =  vtt*dtz +vqq*dqz
        else
-          !alternatively, use theta-l-v with the SGS clouds
-          dtq = ( thlv(k)-thlv(k-1) )/( dzk )
+          !alternatively, use theta-v or theta-l-v with the SGS clouds
+          dtq = ( thv(k)-thv(k-1) )/( dzk )
        endif
        dtl(k) =  dtz
        dqw(k) =  dqz
@@ -1595,9 +1610,9 @@ CONTAINS
 
        !a2fac is needed for the Canuto/Kitamura mod
        if (CKmod .eq. 1) then
-          a2fac = 1./(1. + MAX(ri,0.0))
+          a2fac = one/(one + MAX(ri,zero))
        else
-          a2fac = 1.
+          a2fac = one
        endif
 
        rfc = g1/( g1+g2 )
@@ -1609,7 +1624,7 @@ CONTAINS
        smc = a1 /(a2*a2fac)*  f1/f2
        shc = 3.0*(a2*a2fac)*( g1+g2 )
 
-       ri1 = 0.5/smc
+       ri1 = half/smc
        ri2 = rf1*smc
        ri3 = 4.0*rf2*smc -2.0*ri2
        ri4 = ri2**2
@@ -1639,9 +1654,9 @@ CONTAINS
 !     Output variables:   see subroutine mym_initialize
 !
 !     Work arrays:
-!       elt(nx,ny)      : Length scale depending on the PBL depth    (m)
-!       vsc(nx,ny)      : Velocity scale q_c                       (m/s)
-!                         at first, used for computing elt
+!       elt(single point): Length scale depending on the PBL depth    (m)
+!       vsc(single point): Velocity scale q_c                       (m/s)
+!                          at first, used for computing elt
 !
 !     NOTE: the mixing lengths are meant to be calculated at the full-
 !           sigmal levels (or interfaces beween the model layers).
@@ -1699,11 +1714,11 @@ CONTAINS
     !THEY ONLY IMPOSE LIMITS ON THE CALCULATION OF THE MIXING LENGTH 
     !SCALES SO THAT THE BOULAC MIXING LENGTH (IN FREE ATMOS) DOES
     !NOT ENCROACH UPON THE BOUNDARY LAYER MIXING LENGTH (els, elb & elt).
-    real(kind_phys), parameter :: minpblh     = 300.  !< min mixed-layer height
+    real(kind_phys), parameter :: minpblh     = 250.  !< min mixed-layer height
     real(kind_phys), parameter :: maxdz       = 750.  !< max (half) transition layer depth
                                      !! =0.3*2500 m PBLH, so the transition
                                      !! layer stops growing for PBLHs > 2.5 km.
-    real(kind_phys), parameter :: mindz       = 300.  !< 300  !min (half) transition layer depth
+    real(kind_phys), parameter :: mindz       = 250.  !< min (half) transition layer depth
 
     !SURFACE LAYER LENGTH SCALE MODS TO REDUCE IMPACT IN UPPER BOUNDARY LAYER
     real(kind_phys), parameter :: ZSLH        = 100.  !< Max height correlated to surface conditions (m)
@@ -1804,22 +1819,22 @@ CONTAINS
 
         !wt_u* are for hurricane tuning, meant to reduce diffusion in hurricanes
         ugrid = sqrt(u1(kts)**2 + v1(kts)**2)
-        uonset= 20.
+        uonset= 20._kind_phys
         wt_u1 = one - 0.2*min(one, max(zero, ugrid - uonset)/50.0) !reduce to 0.8
         wt_u2 = one - 0.4*min(one, max(zero, ugrid - uonset)/50.0) !reduce to 0.6
-        cns   = 3.5
-        alp1  = 0.23
-        alp2  = 0.25 !was 0.30
-        alp3  = 2.5 * wt_u2 !taper off bouyancy enhancement in shear-driven pbls
-        alp4  = 5.0 !use 12.0 for linear blending
-        alp5  = 0.3
-        alp6  = 50.
+        cns   = 3.5_kind_phys
+        alp1  = 0.23_kind_phys
+        alp2  = 0.3_kind_phys
+        alp3  = 2.5_kind_phys * wt_u2 !taper off bouyancy enhancement in shear-driven pbls
+        alp4  = 15.0_kind_phys
+        alp5  = 0.3_kind_phys
+        alp6  = 50._kind_phys
 
         ! Impose limits on the height integration for elt and the transition layer depth
         pblh2= max(pblh,300.) !minpblh)
         h1   = max(0.3*pblh2,300.)
         h1   = min(h1,600.)          ! 1/2 transition layer depth
-        h2   = h1/2.0                ! 1/4 transition layer depth
+        h2   = h1*half               ! 1/4 transition layer depth
 
         qtke(kts)  =max(half*qke(kts), half*qkemin) !tke at full sigma levels
         thetaw(kts)=theta(kts)            !theta at full-sigma levels
@@ -1829,12 +1844,12 @@ CONTAINS
            afk      = dz(k)/( dz(k)+dz(k-1) )
            abk      = one -afk
            qkw(k)   = sqrt(max(qke(k)*abk+qke(k-1)*afk, qkemin))
-           qtke(k)  = max(half*(qkw(k)**2), 0.005) ! q -> TKE
+           qtke(k)  = max(half*(qkw(k)**2), 0.005_kind_phys) ! q -> TKE
            thetaw(k)= theta(k)*abk + theta(k-1)*afk
         END DO
 
-        elt = 1.0e-5
-        vsc = 1.0e-5
+        elt = 1.0e-5_kind_phys
+        vsc = 1.0e-5_kind_phys
 
         !   **  Strictly, zwk*h(i,j) -> ( zwk*h(i,j)+z0 )  **
         k   = kts+1
@@ -1856,7 +1871,7 @@ CONTAINS
         elt = MIN( MAX( alp1*elt/vsc, 8.), elt_max)
         !avoid use of buoyancy flux functions which are ill-defined at the surface
         !vflx = ( vt(kts)+one )*flt + ( vq(kts)+tv0 )*flq
-        vflx= fltv
+        vflx= fltv-0.008_kind_phys
         vsc = ( gtr*elt*MAX( vflx, zero ) )**onethird
 
         !   **  Strictly, el(i,j,1) is not zero.  **
@@ -1906,9 +1921,9 @@ CONTAINS
            !el(k) = MIN(elb/( elb/elt+elb/els+one ),elf)
            !squared blending - but take out elb (makes it underdiffusive)
            !el_unstab = SQRT( els**2/(one + (els**2/elt**2) +(els**2/elb**2)))
-           el_unstab = sqrt( els**2/(one + (els**2/elt**2)))
+           !el_unstab = sqrt( els**2/(one + (els**2/elt**2)))
            !non-squared blending:
-           !el_unstab = els/(one + (els1/elt))
+           el_unstab = els/(one + (els1/elt))
            el(k) = min(el_unstab, elb)
            el(k) = min(el(k), elf)  !elf can be smaller than elb in upper pbl
            if ((xland-1.5).GE.zero) then !hurricane tuning, over water only
@@ -2503,7 +2518,7 @@ CONTAINS
 
     real(kind_phys):: auh,aum,adh,adm,aeh,aem,Req,Rsl,Rsl2,                &
            gmelq,sm20,sh20,sm25max,sh25max,sm25min,sh25min,                &
-           sm_pbl,sh_pbl,pblh2,wt,slht,wtpr,mfmax
+           sm_pbl,sh_pbl,pblh2,wt,slht,mfmax
 
     DOUBLE PRECISION  q2sq, t2sq, r2sq, c2sq, elsq, gmel, ghel
     DOUBLE PRECISION  q3sq, t3sq, r3sq, c3sq, dlsq, qdiv
@@ -2512,8 +2527,9 @@ CONTAINS
 !   Stochastic
     integer,         intent(in)                   :: spp_pbl
     real(kind_phys), dimension(kts:kte)           :: pattern_spp_pbl1
-    real(kind_phys):: Prnum, shb, Prlim
-    real(kind_phys), parameter :: Prlimit = 6.0
+    real(kind_phys):: shb, Prlim
+    real(kind_phys), parameter :: Prlimit_fre = 6.0 !Pr limit in free troposphere
+    real(kind_phys), parameter :: Prlimit_sfc = 4.0 !Pr limit at the surface
 
 !
 !    tv0 = 0.61*tref
@@ -2550,7 +2566,7 @@ CONTAINS
 !
 
     DO k = kts+1,kte
-       dzk = 0.5  *( dz(k)+dz(k-1) )
+       dzk = half *( dz(k)+dz(k-1) )
        afk = dz(k)/( dz(k)+dz(k-1) )
        abk = one -afk
        elsq = el (k)**2
@@ -2573,25 +2589,24 @@ CONTAINS
        endif
        !end Canuto/Kitamura mod
 
-       !level 2.0 Prandtl number
-       !Prnum = MIN(sm20/sh20, 4.0)
        !The form of Zilitinkevich et al. (2006) but modified
        !half-way towards Esau and Grachev (2007, Wind Eng)
-       !Prnum = MIN(0.76 + 3.0*MAX(ri,0.0), Prlimit)
-       Prnum = MIN(0.76_kind_phys + 4.0_kind_phys*MAX(ri,zero), Prlimit)
-       !Prnum = MIN(0.76 + 5.0*MAX(ri,0.0), Prlimit)
+       !Prlim = MIN(0.76_kind_phys + 3.0_kind_phys*MAX(ri,zero), Prlimit_fre)
+       !Prlim = MIN(0.76_kind_phys + 4.0_kind_phys*MAX(ri,zero), Prlimit_fre)
 
        !TZC - Kondo Correction
        if (ri >= one) then
           ! Kh/Km = 1/(7*Ri)
-          Prlim = min(7._kind_phys*ri, Prlimit)
+          Prlim = min(7._kind_phys*ri, Prlimit_fre)
        elseif (ri >= 0.01 .and. ri <= one) then
           ! Kh/Km(i,k) = 1/(6.873*Ri + 1/(6.873*Ri))
-          Prlim = min(6.873_kind_phys*ri + one/(6.873_kind_phys*ri), Prlimit)
+          Prlim = min(6.873_kind_phys*ri + one/(6.873_kind_phys*ri), Prlimit_fre)
        else
           ! no Pr limit required?
-          Prlim = Prlimit
+          Prlim = Prlimit_fre
        end if
+       wt    = min(one, zw(k)/max(pblh, 200._kind_phys))  !0 at sfc, 1 at/above pblh
+       Prlim = wt*Prlim + (one-wt)*min(Prlimit_sfc, Prlim)
 !     
 !  Modified: Dec/22/2005, from here, (dlsq -> elsq)
        gmel = gm (k)*elsq
@@ -2631,21 +2646,11 @@ CONTAINS
           !!JOE-Canuto/Kitamura mod
           !!sh(k) = q3sq*a2*( e2+3.0*c1*e5c*gmel )/eden
           !sh(k) = q3sq*(a2*a2fac)*( e2+3.0*c1*e5c*gmel )/eden
-          !sm(k) = Prnum*sh(k)
           !sm(k) = sm(k) * qdiv
 
           !Use level 2.0 functions as in original MYNN
           sh(k) = sh(k) * qdiv
           sm(k) = sm(k) * qdiv
-        !  !sm_pbl = sm(k) * qdiv
-        !
-        !  !Or, use the simple Pr relationship
-        !  sm(k) = Prnum*sh(k)
-        !
-        !  !or blend them:
-        !  pblh2   = MAX(pblh, 300.)
-        !  wt    =.5*TANH((zw(k) - pblh2)/200.) + .5
-        !  sm(k) = sm_pbl*(1.-wt) + sm(k)*wt
 
           !Recalculate terms for later use
           !JOE-Canuto/Kitamura mod
@@ -2662,7 +2667,6 @@ CONTAINS
           !!JOE-Canuto/Kitamura mod
           !!sh(k) = q3sq*a2*( e2+3.0*c1*e5c*gmel )/eden  - retro 5
           !sh(k) = q3sq*(a2*a2fac)*( e2+3.0*c1*e5c*gmel )/eden
-          !sm(k) = Prnum*sh(k)
        ELSE
           !JOE-Canuto/Kitamura mod
           !e1   = q3sq - e1c*ghel
@@ -2683,12 +2687,6 @@ CONTAINS
           !!JOE-Canuto/Kitamura mod
           !!sh(k) = q3sq*a2*( e2+3.0*c1*e5c*gmel )/eden
           sh(k) = q3sq*(a2*a2fac)*( e2+3.0*c1*e5c*gmel )/eden
-        !  sm(k) = Prnum*sh(k)
-
-        !  !or blend them:
-        !  pblh2   = MAX(pblh, 300.)
-        !  wt    = .5*TANH((zw(k) - pblh2)/200.) + .5
-        !  sm(k) = sm_pbl*(1.-wt) + sm(k)*wt
        END IF !end Helfand & Labraga check
 
        !Impose broad limits on Sh and Sm:
@@ -3717,12 +3715,12 @@ END IF
            wt     = min(one, max(zero, (zagl - (pblh2+10.)))/300.) !0 in pbl, 1 aloft
            clim   = clim_pbl*(one-wt) + clim_trp*wt
            zsl    = min(150., max(50., 0.1*pblh2))        !crude ekman layer
-           wt     = min(one, max(zero, zagl - zsl)/200.)  !0 near sfc, 1 above 
+           wt     = min(one, max(zero, zagl - zsl)/150.)  !0 near sfc, 1 above 
            clim   = clim_sfc*(one-wt) + clim*wt
            sgmc   = max( sgmc, qw(k)*clim )
            !apply absolute lower limit in case qw = 0.
            sgmc   = max(1e-13, sgmc)
-           !For cloud fractions, in saturated conditions, apply lower limit on sgmc
+           !For cloud fractions in saturated conditions, apply lower limit on sgmc
            if (qmq .ge. zero) sgmc = max(0.02*qw(k), sgmc)
            
            q1(k)  = qmq  / sgmc  ! Q1, the normalized saturation
@@ -3761,7 +3759,7 @@ END IF
            !exp1
            !cldfra_bl1(k) = max(zero, min(one, half+0.36*atan(1.65*q1k)))
 
-           !For clouds within the pbl, force higher saturation to make clouds
+           !Use specialized forms within and outside the pbl.
            wt2           = min(one, max(zero, (zagl - (pblh1-100.))/200.)) !0 in pbl, 1 aloft
 
            !cldfra_qsq0   = max(zero, min(one, half+0.35*atan(4.1*(q1k))))
@@ -4004,7 +4002,7 @@ END IF
           &khdz,kmdz
     real(kind_phys):: rhs,gfluxm,gfluxp,dztop,maxdfh,mindfh,maxcf,maxKh
     real(kind_phys):: t,esat,qsl,onoff,kh,km,dzk,rhosfc,ustovwsp
-    real(kind_phys):: ustdrag,ustdiff,qvflux,aero_min,aero_max
+    real(kind_phys):: qvflux,aero_min,aero_max
     real(kind_phys):: th_new,portion_qc,portion_qi,condensate,qsat
     integer :: k,kk
 
@@ -4021,7 +4019,7 @@ END IF
     !real(kind_phys), parameter :: wfa_ht  = 2000.   !meters
     !real(kind_phys), parameter :: ifa_ht  = 10000.  !meters
 
-    dztop=.5*(dz(kte)+dz(kte-1))
+    dztop=half*(dz(kte)+dz(kte-1))
 
     ! REGULATE THE MOMENTUM MIXING FROM THE MASS-FLUX SCHEME (on or off)
     ! Note that s_awu and s_awv already come in as 0.0 if bl_mynn_edmf_mom == 0, so
@@ -4068,7 +4066,7 @@ END IF
        delp(k) = rho(k)*grav*dz(k)
     ENDDO
     !delp(kte)  =delp(kte-1)
-    if ( delp(kts) < 0.5*delp(kts+1) )delp(kts)=half*delp(kts+1)
+    if ( delp(kts) < onethird*delp(kts+1) )delp(kts)=onethird*delp(kts+1)
 
     !stability criteria for implicit mf
     if (bl_mynn_edmf == 1) then
@@ -4081,8 +4079,7 @@ END IF
                                  -half*(sd_aw1(k)-sd_aw1(k+1)) )
        ENDDO
     endif
-    ustdrag = MIN(ust*ust,0.99)/wspd  ! limit at ~ 20 m/s
-    ustdiff = MIN(ust*ust,0.01)/wspd  ! limit at ~ 2 m/s
+
     dth(kts:kte) = zero  ! must initialize for moisture_check routine
 
 !!============================================
@@ -6120,6 +6117,10 @@ if (stable_method == 0) then
    if (maxqke <= TKEeps) PBLH_STABLE = pblh
 else
    pblh_stable = max(ust*700._kind_phys, 10._kind_phys)
+   !Even though this estimate will dominate in stable conditions, it should
+   !be liberally bounded:
+   pblh_stable = max(pblh_stable, pblh-sbl_lim)
+   pblh_stable = min(pblh_stable, pblh+sbl_lim)
 endif
 
 !blend the stable and unstable pblh heights
@@ -6313,7 +6314,7 @@ END SUBROUTINE GET_PBLH
  real(kind_phys),dimension(kts:kte), intent(inout) :: vt1, vq1, sgm1
  real(kind_phys):: sigq,xl,rsl,cpm,a,qmq,Aup,Q1,diffqt,qsat_tk,     &
          Fng,qww,alpha,beta,bb,f,pt,t,q2p,b9,satvp,rhgrid,entfac,   &
-         cf_strat,qc_strat,cf_mf,qc_mf,pct_mf
+         cf_strat,qc_strat,cf_mf,qc_mf,pct_mf,wt2
  real(kind_phys), parameter :: cf_thresh = 0.5 ! only overwrite stratus CF less than this value
 
  ! Variables interpolated to interface levels
@@ -6646,7 +6647,8 @@ END SUBROUTINE GET_PBLH
        if ((landsea-1.5).GE.zero) then
           !water: increase factor to compensate for decreased pwmin/pwmax
           !0.58*25 = 14.5
-          exc_fac = 14.5_kind_phys
+          !0.58*20 = 11.6
+          exc_fac = 11.6_kind_phys
        else
           !land: no need to increase factor - already sufficiently large superadiabatic layers
           exc_fac = 0.58_kind_phys
@@ -6741,12 +6743,15 @@ END SUBROUTINE GET_PBLH
        overshoot = 0 !int
        l  = minwidth + dl*real(ip-1,kind=kind_phys)    ! diameter of plume
        do k=kts+1,kte-2
+          zagl = zw1(k) + half*dz1(k)
           !Entrainment from Tian and Kuang (2016)
           !ENT(k,ip) = 0.35/(MIN(MAX(UPW(K-1,ip),0.75),1.9)*l)
-          wmin = 0.3_kind_phys + l*0.0005_kind_phys
+          wmin   = 0.3_kind_phys + l*0.0005_kind_phys
 !          ENT(k,ip) = 0.33_kind_phys/(MIN(MAX(UPW(k,ip),wmin),one)*l)
 !          ENT(k,ip) = (0.20*sqrt(qkebl))/(MIN(MAX(UPW(K-1,ip),wmin),one)*l)
-          entfac = 0.21_kind_phys * min(2.0_kind_phys, max(1.1_kind_phys, sqrt(qkebl)))
+          entfac = 0.21_kind_phys * min(1.64_kind_phys, max(1.2_kind_phys, sqrt(qkebl)))
+          wt2    = min(one, max(zero, zagl - pblh)/500.) !0 in pbl, 1 aloft
+          entfac = entfac*(one-wt2) + wt2*0.33_kind_phys
           ENT(k,ip) = entfac/(MIN(MAX(UPW(K-1,ip),wmin),one)*l)
           
           !Entrainment from Negggers (2015, JAMES)
@@ -7556,7 +7561,7 @@ real(kind_phys):: diff,exn,t,th,qs,qx,qxold,frac_ice,frac_liq,thvin
      qs=qsat_blend(t,p)
      qxold=qc+qi
      qx=qc+qi
-     qx=0.5*qx + 0.5*max((qt-qs),0.)
+     qx=half*qx + half*max((qt-qs),zero)
      qc=frac_liq*qx
      qi=frac_ice*qx
      if (abs(qx-qxold)<diff) exit
@@ -7564,14 +7569,14 @@ real(kind_phys):: diff,exn,t,th,qs,qx,qxold,frac_ice,frac_liq,thvin
 
   t=exn*thl + xlvcp*qc + xlscp*qi
   qs=qsat_blend(t,p)
-  qx=max(qt-qs,0.)
+  qx=max(qt-qs,zero)
   qc=frac_liq*qx
   qi=frac_ice*qx
 
   !thv=(thl+xlv/cp*qc).*(1+(1-rvovrd)*(qt-qc)-qc)
 !was this: thv=(thl+xlvcp*qc)*(1.+qt*(rvovrd-1.)-rvovrd*qc)
   !thv=(thl + xlvcp*qc + xlscp*qi)*(1. + qt*(rvovrd-1.)-rvovrd*qc)
-  thv=(thl + xlvcp*qc + xlscp*qi)*(1. + p608*(qt-qx))
+  thv=(thl + xlvcp*qc + xlscp*qi)*(one + p608*(qt-qx))
 
 !  if (qc > zero) then
 !    print*,"edmf sat, p:",p," iterations:",ni
